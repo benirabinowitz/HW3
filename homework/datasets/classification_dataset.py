@@ -33,14 +33,20 @@ class SuperTuxDataset(Dataset):
         xform = None
 
         if transform_pipeline == "default":
-            xform = transforms.ToTensor()
+            xform = transforms.Compose([
+                transforms.ToTensor(),
+            ])
         elif transform_pipeline == "aug":
-            # TODO: construct your custom augmentation
-            xform = transforms.Compose(
-                [
-                    transforms.ToTensor(),
-                ]
-            )
+            xform = transforms.Compose([
+                transforms.RandomHorizontalFlip(),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
+                transforms.RandomAffine(
+                    degrees=15, 
+                    translate=(0.1, 0.1),
+                    scale=(0.9, 1.1)
+                ),
+                transforms.ToTensor(),
+            ])
 
         if xform is None:
             raise ValueError(f"Invalid transform {transform_pipeline} specified!")
@@ -68,6 +74,7 @@ def load_data(
     num_workers: int = 4,
     batch_size: int = 128,
     shuffle: bool = False,
+    pin_memory: bool = False
 ) -> DataLoader | Dataset:
     """
     Constructs the dataset/dataloader.
@@ -94,4 +101,5 @@ def load_data(
         batch_size=batch_size,
         shuffle=shuffle,
         drop_last=True,
+        pin_memory=pin_memory
     )

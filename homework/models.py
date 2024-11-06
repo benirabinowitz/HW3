@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 
 HOMEWORK_DIR = Path(__file__).resolve().parent
-INPUT_MEAN = [0.2788, 0.2657, 0.2629]
-INPUT_STD = [0.2064, 0.1944, 0.2252]
+INPUT_MEAN = [0.485, 0.456, 0.406]
+INPUT_STD = [0.229, 0.224, 0.225]
 
 
 class Classifier(nn.Module):
@@ -26,8 +26,29 @@ class Classifier(nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-        pass
+        self.features = nn.Sequential(
+            nn.Conv2d(in_channels, 32, 3, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            
+            nn.Conv2d(32, 64, 3, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            
+            nn.Conv2d(64, 128, 3, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True),
+            nn.MaxPool2d(2),
+            
+            nn.AdaptiveAvgPool2d(1)
+        )
+
+        self.classifier = nn.Sequential(
+            nn.Dropout(0.2),
+            nn.Linear(128, num_classes)
+        )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -37,14 +58,15 @@ class Classifier(nn.Module):
         Returns:
             tensor (b, num_classes) logits
         """
-        # optional: normalizes the input
-        z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        x = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        
+        x = self.features(x)
+        x = x.view(x.size(0), -1)
+        x = self.classifier(x)
+        
+        return x
 
-        # TODO: replace with actual forward pass
-        logits = torch.randn(x.size(0), 6)
-
-        return logits
-
+    @torch.inference_mode()
     def predict(self, x: torch.Tensor) -> torch.Tensor:
         """
         Used for inference, returns class labels
@@ -57,10 +79,22 @@ class Classifier(nn.Module):
         Returns:
             pred (torch.LongTensor): class labels {0, 1, ..., 5} with shape (b, h, w)
         """
-        return self(x).argmax(dim=1)
+        with torch.amp.autocast('cuda'):
+            x = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+            
+            x = self.features(x)
+            x = x.view(x.size(0), -1)
+            x = self.classifier(x)
+            
+            pred = x.argmax(dim=1)
+            
+            if x.is_cuda:
+                torch.cuda.synchronize()
+        
+        return pred
 
 
-class Detector(torch.nn.Module):
+class Detector(nn.Module):
     def __init__(
         self,
         in_channels: int = 3,
@@ -78,8 +112,48 @@ class Detector(torch.nn.Module):
         self.register_buffer("input_mean", torch.as_tensor(INPUT_MEAN))
         self.register_buffer("input_std", torch.as_tensor(INPUT_STD))
 
-        # TODO: implement
-        pass
+        self.enc1 = nn.Sequential(
+            nn.Conv2d(in_channels, 32, 3, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True)
+        )
+        self.enc2 = nn.Sequential(
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(32, 64, 3, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True)
+        )
+        self.enc3 = nn.Sequential(
+            nn.MaxPool2d(2, 2),
+            nn.Conv2d(64, 128, 3, padding=1, bias=False),
+            nn.BatchNorm2d(128),
+            nn.ReLU(inplace=True)
+        )
+
+        self.dec3 = nn.Sequential(
+            nn.ConvTranspose2d(128, 64, 4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(64),
+            nn.ReLU(inplace=True)
+        )
+        self.dec2 = nn.Sequential(
+            nn.ConvTranspose2d(128, 32, 4, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True)
+        )
+
+        self.seg_head = nn.Sequential(
+            nn.Conv2d(64, 32, 3, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, num_classes, 1)
+        )
+        
+        self.depth_head = nn.Sequential(
+            nn.Conv2d(64, 32, 3, padding=1, bias=False),
+            nn.BatchNorm2d(32),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(32, 1, 1),
+        )
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -94,15 +168,24 @@ class Detector(torch.nn.Module):
                 - logits (b, num_classes, h, w)
                 - depth (b, h, w)
         """
-        # optional: normalizes the input
-        z = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        x = (x - self.input_mean[None, :, None, None]) / self.input_std[None, :, None, None]
+        
+        e1 = self.enc1(x)
+        e2 = self.enc2(e1)
+        e3 = self.enc3(e2)
 
-        # TODO: replace with actual forward pass
-        logits = torch.randn(x.size(0), 3, x.size(2), x.size(3))
-        raw_depth = torch.rand(x.size(0), x.size(2), x.size(3))
+        d3 = self.dec3(e3)
+        d3_cat = torch.cat([d3, e2], dim=1)
+        d2 = self.dec2(d3_cat)
+        d2_cat = torch.cat([d2, e1], dim=1)
 
-        return logits, raw_depth
+        seg = self.seg_head(d2_cat)
+        depth = torch.relu(self.depth_head(d2_cat)).squeeze(1)
 
+        return seg, depth
+
+    @torch.inference_mode()
+    @torch.jit.export
     def predict(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Used for inference, takes an image and returns class labels and normalized depth.
@@ -116,12 +199,8 @@ class Detector(torch.nn.Module):
                 - pred: class labels {0, 1, 2} with shape (b, h, w)
                 - depth: normalized depth [0, 1] with shape (b, h, w)
         """
-        logits, raw_depth = self(x)
+        logits, depth = self(x)
         pred = logits.argmax(dim=1)
-
-        # Optional additional post-processing for depth only if needed
-        depth = raw_depth
-
         return pred, depth
 
 
@@ -139,14 +218,21 @@ def load_model(
     """
     Called by the grader to load a pre-trained model by name
     """
+    if model_name not in MODEL_FACTORY:
+        raise ValueError(f"Model '{model_name}' not found in MODEL_FACTORY")
+        
     m = MODEL_FACTORY[model_name](**model_kwargs)
 
     if with_weights:
         model_path = HOMEWORK_DIR / f"{model_name}.th"
-        assert model_path.exists(), f"{model_path.name} not found"
+
+        import os
+        
+        if not model_path.exists():
+            raise FileNotFoundError(f"{model_path.name} not found")
 
         try:
-            m.load_state_dict(torch.load(model_path, map_location="cpu"))
+            m.load_state_dict(torch.load(model_path, map_location="cpu", weights_only=True))
         except RuntimeError as e:
             raise AssertionError(
                 f"Failed to load {model_path.name}, make sure the default model arguments are set correctly"
@@ -161,6 +247,29 @@ def load_model(
     return m
 
 
+# def save_model(model: torch.nn.Module) -> str:
+#     """
+#     Use this function to save your model in train.py
+#     """
+#     model_name = None
+
+#     for n, m in MODEL_FACTORY.items():
+#         if type(model) is m:
+#             model_name = n
+#             break
+
+#     if model_name is None:
+#         raise ValueError(f"Model type '{model_class}' not supported")
+
+#     output_path = HOMEWORK_DIR / f"{model_name}.th"
+#     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+#     torch.save(model.state_dict(), output_path)
+
+#     output_path = HOMEWORK_DIR / f"{model_name}.th"
+#     torch.save(model.state_dict(), output_path)
+
+#     return str(output_path)
 def save_model(model: torch.nn.Module) -> str:
     """
     Use this function to save your model in train.py

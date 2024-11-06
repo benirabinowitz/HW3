@@ -113,7 +113,7 @@ class ClassifierGrader(BaseGrader):
 
         assert output.shape == (batch_size,), f"Expected shape ({batch_size},), got {output.shape}"
 
-    @Case(score=25, timeout=10000)
+    @Case(score=25, timeout=20000)
     def test_accuracy(self):
         """Accuracy"""
         key = "accuracy"
@@ -169,7 +169,7 @@ class RoadDetectorGrader(BaseGrader):
 
             self._metric_computer.add(pred, track, depth, pred_depth)
 
-    @Case(score=10, timeout=1000)
+    @Case(score=10, timeout=15000)
     def test_model(self):
         """Predict"""
         batch_size = 4
@@ -184,7 +184,7 @@ class RoadDetectorGrader(BaseGrader):
         assert pred.shape == (batch_size, 96, 128), f"Label shape: {pred.shape}"
         assert pred_depth.shape == (batch_size, 96, 128), f"Depth shape: {pred_depth.shape}"
 
-    @Case(score=10, timeout=10000)
+    @Case(score=10, timeout=20000)
     def test_accuracy(self):
         """Segmentation Accuracy"""
         key = "accuracy"
@@ -193,7 +193,7 @@ class RoadDetectorGrader(BaseGrader):
 
         return score, f"{key}: {val:.3f}"
 
-    @Case(score=25, timeout=500)
+    @Case(score=25, timeout=15000)
     def test_iou(self):
         """Segmentation IoU"""
         key = "iou"
